@@ -1,7 +1,7 @@
 import streamlit as st
 
 # Set a title for the app
-st.title("Hello World from Codespaces! vver_03")
+st.title("Hello World from Codespaces! ver_03")
 
 # Write some text
 st.write("This Streamlit app is running inside GitHub Codespaces.")
