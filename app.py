@@ -11,97 +11,77 @@ from utils import extract_last_table_as_df
 if 'uploaded_file_bytes' not in st.session_state:
     st.session_state.uploaded_file_bytes = None
     st.session_state.uploaded_file_name = None
-    st.session_state.dataframe = None
-    st.session_state.header_option_used = True # Store the option used to GENERATE the current df
-
-# --- Helper Function for Resetting State ---
-def reset_state():
-    # Clear file-specific data
-    st.session_state.uploaded_file_bytes = None
-    st.session_state.uploaded_file_name = None
-    st.session_state.dataframe = None
-    st.session_state.header_option_used = True
-    # Optionally reset the file uploader itself by changing its key if needed,
-    # but often clearing the data state is sufficient.
-    # If you added a key like 'file_uploader_key', increment it here:
-    # if 'file_uploader_key' in st.session_state:
-    #    st.session_state.file_uploader_key += 1
+    st.session_state.dataframe_result = None # Store the result of the LAST processing
+    st.session_state.processing_attempted = False # Track if Process button was clicked
 
 # --- Main App Logic ---
-st.title("Advanced DOCX Table Extractor 2")
+st.title("DOCX Table Extractor with Process Button")
 
+# --- File Uploader ---
 uploaded_file = st.file_uploader(
-    "Choose a DOCX file",
+    "1. Choose a DOCX file",
     type=["docx"],
-    # Removed on_change callback
-    # key="file_uploader_key" # Optional: Add key if explicit widget reset is needed
+    key="file_uploader" # Added a key for potential future state management needs
 )
 
-# --- Process the file upload IN THE SAME RUN if a file is present ---
+# --- Store/Update Uploaded File Details ---
+# This block runs whenever the file uploader widget has a file object
 if uploaded_file is not None:
-    # Check if this is genuinely a NEW file compared to what's in state
-    # (This helps prevent reprocessing if the script reruns for other reasons)
-    # A simple check is if the current session state has no bytes yet.
-    is_new_upload = st.session_state.uploaded_file_bytes is None
+    # Check if this is a different file than the one stored (optional but good practice)
+    # For simplicity, we'll just update if the uploader has a file.
+    new_file_bytes = uploaded_file.getvalue()
+    new_file_name = uploaded_file.name
 
-    # If it's a new upload, process and store it
-    if is_new_upload:
-        st.session_state.uploaded_file_bytes = uploaded_file.getvalue()
-        st.session_state.uploaded_file_name = uploaded_file.name
-        # Always process a new file using the default header setting first
-        st.session_state.header_option_used = True
-        st.session_state.dataframe = extract_last_table_as_df(
-            st.session_state.uploaded_file_bytes,
-            use_first_row_as_header=True # Use default setting
-        )
-        # No st.rerun() here - let the script continue to the display section
+    # If the uploaded file is different from what's stored, update state
+    # and reset previous processing results.
+    if new_file_bytes != st.session_state.get('uploaded_file_bytes'):
+        st.session_state.uploaded_file_bytes = new_file_bytes
+        st.session_state.uploaded_file_name = new_file_name
+        st.session_state.dataframe_result = None # Clear old results
+        st.session_state.processing_attempted = False # Reset processing flag
+        st.info(f"File '{new_file_name}' loaded. Ready to process.")
+        # We don't process here, just load and wait for the button
 
-# --- Display Area (runs if file bytes exist in session state) ---
+# --- Processing Controls and Button (Only if a file is loaded in state) ---
 if st.session_state.uploaded_file_bytes is not None:
-    st.success(f"Working with: {st.session_state.uploaded_file_name}")
-    st.write("---")
 
-    # --- UI Controls ---
-    # Get the current value of the checkbox from the UI in this run
-    use_header_checkbox_current_value = st.checkbox(
-        "Use first row as header",
-        value=st.session_state.header_option_used, # Set initial value based on last processing run
+    st.write("---")
+    st.markdown(f"**File ready:** `{st.session_state.uploaded_file_name}`")
+
+    # --- Configuration Options ---
+    use_header_checkbox = st.checkbox(
+        "2. Use first row as header",
+        value=True, # Default to checked each time UI is drawn before processing
         key='header_checkbox'
     )
+    st.write("---") # Separator
 
-    # Determine if the checkbox setting differs from the setting used for the currently stored dataframe
-    show_refresh_button = (use_header_checkbox_current_value != st.session_state.header_option_used)
-
-    if show_refresh_button:
-        st.warning("Header option changed. Click Refresh to update the table view.")
-        if st.button("Refresh Table View"):
-            # Process again using the CURRENT checkbox setting
-            new_df = extract_last_table_as_df(
+    # --- Process Button ---
+    if st.button("3. Process File!"):
+        st.session_state.processing_attempted = True # Mark that we tried processing
+        with st.spinner("Processing table..."): # Show a spinner during processing
+            df_result = extract_last_table_as_df(
                 st.session_state.uploaded_file_bytes,
-                use_first_row_as_header=use_header_checkbox_current_value # Use value from checkbox
+                use_first_row_as_header=use_header_checkbox # Use current checkbox value
             )
-            # Update session state: store the new dataframe and the option we just used
-            st.session_state.dataframe = new_df
-            st.session_state.header_option_used = use_header_checkbox_current_value
-            # Rerun needed AFTER processing to update the display and hide the refresh button
-            st.rerun()
+        st.session_state.dataframe_result = df_result # Store result (DataFrame or None)
+        # No rerun needed here, the display section below will update naturally
 
-    # --- Display Table ---
-    st.write("### Last Table Extracted:")
-    if st.session_state.dataframe is not None:
-        if not st.session_state.dataframe.empty:
-            st.dataframe(st.session_state.dataframe)
+    # --- Display Area (Only show results *after* processing attempt) ---
+    if st.session_state.processing_attempted:
+        st.write("---")
+        st.write("### Processing Result:")
+        result_df = st.session_state.dataframe_result
+
+        if result_df is not None:
+            if not result_df.empty:
+                st.dataframe(result_df)
+            else:
+                st.warning("Processing successful, but the extracted table is empty.")
         else:
-            st.warning("The extracted table appears to be empty.")
-    else:
-        # This means extraction failed or no table was found
-        st.error("Could not extract a valid table from the document.")
-
-    st.write("---")
-    # Button to clear everything and upload a new file
-    if st.button("Upload New File"):
-        reset_state()
-        st.rerun() # Rerun to reflect the cleared state
+            # This means extract_last_table_as_df returned None (error or no table)
+            st.error("Could not extract a valid table. Check if the document contains tables.")
 
 else:
+    # Initial state before any upload
     st.info("👆 Upload a DOCX file to begin.")
