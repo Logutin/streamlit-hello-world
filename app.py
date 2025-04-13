@@ -1,118 +1,107 @@
+# app.py
 import streamlit as st
-import docx
 import pandas as pd
 import io
 
-# --- Function to Extract Last Table (Updated) ---
-def extract_last_table_as_df(uploaded_file):
-    """
-    Reads a DOCX file, extracts the last table, cleans headers for uniqueness,
-    and returns it as a Pandas DataFrame.
-    """
-    try:
-        document = docx.Document(uploaded_file)
+# Import the function from your utils file
+from utils import extract_last_table_as_df
 
-        if not document.tables:
-            return None # No tables found
+# --- Initialize Session State ---
+# Use session state to store persistent info across reruns
+if 'uploaded_file_bytes' not in st.session_state:
+    st.session_state.uploaded_file_bytes = None
+    st.session_state.uploaded_file_name = None
+    st.session_state.dataframe = None
+    st.session_state.header_option_used = True # Store the option used to GENERATE the current df
 
-        last_table = document.tables[-1]
-        data = []
-        for row in last_table.rows:
-            # Ensure cell text is stripped of leading/trailing whitespace
-            row_data = [cell.text.strip() for cell in row.cells]
-            data.append(row_data)
+# --- Helper Function for Resetting State ---
+def reset_state():
+    # Clear file-specific data
+    st.session_state.uploaded_file_bytes = None
+    st.session_state.uploaded_file_name = None
+    st.session_state.dataframe = None
+    st.session_state.header_option_used = True
+    # Optionally reset the file uploader itself by changing its key if needed,
+    # but often clearing the data state is sufficient.
+    # If you added a key like 'file_uploader_key', increment it here:
+    # if 'file_uploader_key' in st.session_state:
+    #    st.session_state.file_uploader_key += 1
 
-        if not data:
-            return None # Table was empty
+# --- Main App Logic ---
+st.title("Advanced DOCX Table Extractor 2")
 
-        # --- Header Cleaning Logic ---
-        raw_headers = data[0]
-        df_data = data[1:]
-        processed_headers = []
-        counts = {} # To track counts of each header name seen so far
+uploaded_file = st.file_uploader(
+    "Choose a DOCX file",
+    type=["docx"],
+    # Removed on_change callback
+    # key="file_uploader_key" # Optional: Add key if explicit widget reset is needed
+)
 
-        for i, header in enumerate(raw_headers):
-            # If header is empty or None, create a default name
-            if not header:
-                col_name = f"Unnamed_{i+1}" # Use 1-based index for user display
-            else:
-                col_name = header # Use the original name initially
-
-            # Check for duplicates and append count if needed
-            if col_name in counts:
-                counts[col_name] += 1
-                processed_headers.append(f"{col_name}_{counts[col_name]}")
-            else:
-                counts[col_name] = 1
-                processed_headers.append(col_name)
-        # --- End Header Cleaning ---
-
-        # Create DataFrame with cleaned headers
-        df = pd.DataFrame(df_data, columns=processed_headers)
-        return df
-
-    except Exception as e:
-        # More specific error logging can be helpful
-        st.error(f"Error processing DOCX table: {e}")
-        # You could log the full traceback here if needed for debugging
-        # import traceback
-        # st.error(traceback.format_exc())
-        return None
-# --- End of Function ---
-
-
-# --- Streamlit App (Main part remains largely the same) ---
-st.title("DOCX Uploader, Reader, and Table Extractor")
-
-st.write("Upload a .docx file. We'll show details and extract the last table.")
-
-uploaded_file = st.file_uploader("Choose a DOCX file", type=["docx"])
-
+# --- Process the file upload IN THE SAME RUN if a file is present ---
 if uploaded_file is not None:
-    st.success(f"Successfully uploaded: {uploaded_file.name}")
+    # Check if this is genuinely a NEW file compared to what's in state
+    # (This helps prevent reprocessing if the script reruns for other reasons)
+    # A simple check is if the current session state has no bytes yet.
+    is_new_upload = st.session_state.uploaded_file_bytes is None
 
-    # --- Basic File Details ---
-    st.write("---")
-    st.write("### Basic File Details:")
-    st.write(f"**Name:** {uploaded_file.name}")
-    st.write(f"**Type:** {uploaded_file.type}")
-    st.write(f"**Size:** {uploaded_file.size} bytes")
-    st.write("---")
+    # If it's a new upload, process and store it
+    if is_new_upload:
+        st.session_state.uploaded_file_bytes = uploaded_file.getvalue()
+        st.session_state.uploaded_file_name = uploaded_file.name
+        # Always process a new file using the default header setting first
+        st.session_state.header_option_used = True
+        st.session_state.dataframe = extract_last_table_as_df(
+            st.session_state.uploaded_file_bytes,
+            use_first_row_as_header=True # Use default setting
+        )
+        # No st.rerun() here - let the script continue to the display section
 
-    # --- Document Content Analysis ---
-    st.write("### Document Content Analysis:")
-    try:
-        # Reset buffer position before reading again is crucial
-        uploaded_file.seek(0)
-        document = docx.Document(uploaded_file)
-        num_paragraphs = len(document.paragraphs)
-        num_tables = len(document.tables)
-        st.write(f"**Number of paragraphs:** {num_paragraphs}")
-        st.write(f"**Number of tables:** {num_tables}")
-
-    except Exception as e:
-        st.error(f"Error reading basic DOCX properties: {e}")
-
+# --- Display Area (runs if file bytes exist in session state) ---
+if st.session_state.uploaded_file_bytes is not None:
+    st.success(f"Working with: {st.session_state.uploaded_file_name}")
     st.write("---")
 
-    # --- Extract and Display Last Table ---
-    st.write("### Last Table Extraction:")
+    # --- UI Controls ---
+    # Get the current value of the checkbox from the UI in this run
+    use_header_checkbox_current_value = st.checkbox(
+        "Use first row as header",
+        value=st.session_state.header_option_used, # Set initial value based on last processing run
+        key='header_checkbox'
+    )
 
-    # Reset buffer position again before passing to the table extraction function
-    uploaded_file.seek(0)
-    df_last_table = extract_last_table_as_df(uploaded_file)
+    # Determine if the checkbox setting differs from the setting used for the currently stored dataframe
+    show_refresh_button = (use_header_checkbox_current_value != st.session_state.header_option_used)
 
-    if df_last_table is not None:
-        if not df_last_table.empty:
-            st.info("Displaying the last table found. Headers were automatically cleaned for uniqueness if necessary.") # Added info
-            st.dataframe(df_last_table)
+    if show_refresh_button:
+        st.warning("Header option changed. Click Refresh to update the table view.")
+        if st.button("Refresh Table View"):
+            # Process again using the CURRENT checkbox setting
+            new_df = extract_last_table_as_df(
+                st.session_state.uploaded_file_bytes,
+                use_first_row_as_header=use_header_checkbox_current_value # Use value from checkbox
+            )
+            # Update session state: store the new dataframe and the option we just used
+            st.session_state.dataframe = new_df
+            st.session_state.header_option_used = use_header_checkbox_current_value
+            # Rerun needed AFTER processing to update the display and hide the refresh button
+            st.rerun()
+
+    # --- Display Table ---
+    st.write("### Last Table Extracted:")
+    if st.session_state.dataframe is not None:
+        if not st.session_state.dataframe.empty:
+            st.dataframe(st.session_state.dataframe)
         else:
-            st.warning("The last table found in the document appears to be empty (no data rows).") # Clarified message
+            st.warning("The extracted table appears to be empty.")
     else:
-        st.warning("Could not find any tables in the document or failed to read the last one.")
+        # This means extraction failed or no table was found
+        st.error("Could not extract a valid table from the document.")
 
     st.write("---")
-    st.info("Note: File processed in memory, not saved permanently.")
+    # Button to clear everything and upload a new file
+    if st.button("Upload New File"):
+        reset_state()
+        st.rerun() # Rerun to reflect the cleared state
 
 else:
-    st.markdown("👆 Upload a file using the button above.")
+    st.info("👆 Upload a DOCX file to begin.")
